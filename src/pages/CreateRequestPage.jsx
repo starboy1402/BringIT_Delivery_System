@@ -42,22 +42,29 @@ export function CreateRequestPage() {
     }
 
     setSubmitting(true);
-    const result = await requestsDB.create({
-      item,
-      pickup: form.get('pickup'),
-      dropoff: form.get('dropoff'),
-      reward: Number(reward),
-      urgency: form.get('urgency'),
-      details: form.get('details')?.trim() || '',
-      requesterId: user.id,
-      requesterName: user.name,
-    });
-    setSubmitting(false);
+    try {
+      const result = await requestsDB.create({
+        item,
+        pickup: form.get('pickup'),
+        dropoff: form.get('dropoff'),
+        reward: Number(reward),
+        urgency: form.get('urgency'),
+        details: form.get('details')?.trim() || '',
+        requesterId: user.id,
+        requesterName: user.name,
+      });
 
-    if (!result) {
-      setError('Failed to post request. Check your connection or try again.');
+      if (!result) {
+        setError('Failed to post request. Check your connection or try again.');
+        setSubmitting(false);
+        return;
+      }
+    } catch {
+      setError('Something went wrong. Please try again.');
+      setSubmitting(false);
       return;
     }
+    setSubmitting(false);
 
     showToast('Request posted successfully! 🎉');
     navigate('/feed');

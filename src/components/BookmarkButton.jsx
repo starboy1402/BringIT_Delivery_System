@@ -7,13 +7,14 @@ import { Bookmark, BookmarkCheck } from 'lucide-react';
 import { useAuth, useToast } from '@/contexts';
 import { usersDB } from '@/lib/db';
 
-export function BookmarkButton({ requestId }) {
+export function BookmarkButton({ requestId, isBookmarked: isBookmarkedProp }) {
   const { user, refreshUser } = useAuth();
   const { showToast } = useToast();
-  const [bookmarked, setBookmarked] = useState(false);
+  const [bookmarked, setBookmarked] = useState(isBookmarkedProp ?? false);
 
+  // Only fetch from DB if the parent didn't pass the prop
   useEffect(() => {
-    if (!user) return;
+    if (isBookmarkedProp !== undefined || !user) return;
     let cancelled = false;
     async function check() {
       const result = await usersDB.isBookmarked(user.id, requestId);
@@ -21,16 +22,27 @@ export function BookmarkButton({ requestId }) {
     }
     check();
     return () => { cancelled = true; };
-  }, [user, requestId]);
+  }, [user, requestId, isBookmarkedProp]);
+
+  // Sync with parent prop when it changes
+  useEffect(() => {
+    if (isBookmarkedProp !== undefined) setBookmarked(isBookmarkedProp);
+  }, [isBookmarkedProp]);
 
   if (!user) return null;
 
   const toggle = async (e) => {
     e.stopPropagation();
-    const newState = await usersDB.toggleBookmark(user.id, requestId);
-    setBookmarked(newState);
-    refreshUser();
-    showToast(newState ? 'Saved to bookmarks' : 'Removed from bookmarks', 'info');
+    setBookmarked(!bookmarked); // Optimistic update
+    try {
+      const newState = await usersDB.toggleBookmark(user.id, requestId);
+      setBookmarked(newState);
+      refreshUser();
+      showToast(newState ? 'Saved to bookmarks' : 'Removed from bookmarks', 'info');
+    } catch {
+      setBookmarked(bookmarked); // Revert on error
+      showToast('Failed to update bookmark', 'error');
+    }
   };
 
   return (

@@ -11,6 +11,7 @@ import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Package, Bell, Menu, X, Sun, Moon, LogOut } from 'lucide-react';
 import { useAuth, useToast, useTheme } from '@/contexts';
 import { notificationsDB } from '@/lib/db';
+import { supabase } from '@/lib/supabase';
 import { Button } from '@/components/ui/Button';
 import { Avatar } from '@/components/ui/Avatar';
 import { cn } from '@/utils/cn';
@@ -39,7 +40,7 @@ export function Navbar() {
   const [notifications, setNotifications] = useState([]);
   const [unreadCount, setUnreadCount] = useState(0);
 
-  // Poll for notifications every 5 seconds when logged in
+  // Load notifications on mount + subscribe to realtime changes
   useEffect(() => {
     if (!user) return;
 
@@ -57,8 +58,21 @@ export function Navbar() {
     };
 
     loadNotifications();
-    const interval = setInterval(loadNotifications, 30000);
-    return () => clearInterval(interval);
+
+    // Realtime subscription — instant notification updates
+    const channel = supabase
+      .channel(`notifications:${user.id}`)
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
+        () => { loadNotifications(); }
+      )
+      .on('postgres_changes',
+        { event: 'UPDATE', schema: 'public', table: 'notifications', filter: `user_id=eq.${user.id}` },
+        () => { loadNotifications(); }
+      )
+      .subscribe();
+
+    return () => { supabase.removeChannel(channel); };
   }, [user]);
 
   /** Log out and redirect to landing page. */

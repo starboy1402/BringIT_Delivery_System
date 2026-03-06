@@ -45,11 +45,12 @@ export const requestsDB = {
      * @param {string} [filters.search]  - Free text search
      * @returns {Promise<Array>}
      */
-    async getAll(filters) {
+    async getAll(filters, { limit = 30, offset = 0 } = {}) {
         let query = supabase
             .from('requests')
-            .select('*')
-            .order('created_at', { ascending: false });
+            .select('*', { count: 'exact' })
+            .order('created_at', { ascending: false })
+            .range(offset, offset + limit - 1);
 
         // Apply status filter
         if (filters?.status && filters.status !== 'All') {
@@ -61,24 +62,16 @@ export const requestsDB = {
             query = query.eq('urgency', filters.urgency);
         }
 
-        const { data, error } = await query;
-        if (error) { console.error('getAll error:', error); return []; }
-
-        let results = (data || []).map(mapRequest);
-
-        // Apply text search on the client side (matches item, pickup, dropoff, requester name)
+        // Server-side text search across item, pickup, dropoff, requester_name
         if (filters?.search) {
-            const q = filters.search.toLowerCase();
-            results = results.filter(
-                (r) =>
-                    r.item.toLowerCase().includes(q) ||
-                    r.pickup.toLowerCase().includes(q) ||
-                    r.dropoff.toLowerCase().includes(q) ||
-                    r.requesterName.toLowerCase().includes(q)
-            );
+            const q = `%${filters.search}%`;
+            query = query.or(`item.ilike.${q},pickup.ilike.${q},dropoff.ilike.${q},requester_name.ilike.${q}`);
         }
 
-        return results;
+        const { data, error, count } = await query;
+        if (error) { console.error('getAll error:', error); return { data: [], total: 0, error }; }
+
+        return { data: (data || []).map(mapRequest), total: count || 0, error: null };
     },
 
     /**
@@ -101,12 +94,13 @@ export const requestsDB = {
      * @param {string} userId
      * @returns {Promise<Array>}
      */
-    async getByUser(userId) {
+    async getByUser(userId, { limit = 100 } = {}) {
         const { data, error } = await supabase
             .from('requests')
             .select('*')
             .or(`requester_id.eq.${userId},accepted_by_id.eq.${userId}`)
-            .order('created_at', { ascending: false });
+            .order('created_at', { ascending: false })
+            .limit(limit);
         if (error) { console.error('getByUser error:', error); return []; }
         return (data || []).map(mapRequest);
     },
@@ -116,18 +110,19 @@ export const requestsDB = {
      * @returns {Promise<{ total: number, open: number, inProgress: number, completed: number }>}
      */
     async getStats() {
-        // Fetch all statuses in one query and count client-side
-        const { data, error } = await supabase
-            .from('requests')
-            .select('status');
-        if (error) { console.error('getStats error:', error); return { total: 0, open: 0, inProgress: 0, completed: 0 }; }
-
-        const rows = data || [];
+        // Use head:true count queries — no row data downloaded
+        const [totalRes, openRes, acceptedRes, inProgressRes, completedRes] = await Promise.all([
+            supabase.from('requests').select('id', { count: 'exact', head: true }),
+            supabase.from('requests').select('id', { count: 'exact', head: true }).eq('status', 'Open'),
+            supabase.from('requests').select('id', { count: 'exact', head: true }).eq('status', 'Accepted'),
+            supabase.from('requests').select('id', { count: 'exact', head: true }).eq('status', 'InProgress'),
+            supabase.from('requests').select('id', { count: 'exact', head: true }).eq('status', 'Completed'),
+        ]);
         return {
-            total: rows.length,
-            open: rows.filter((r) => r.status === 'Open').length,
-            inProgress: rows.filter((r) => r.status === 'InProgress' || r.status === 'Accepted').length,
-            completed: rows.filter((r) => r.status === 'Completed').length,
+            total: totalRes.count || 0,
+            open: openRes.count || 0,
+            inProgress: (acceptedRes.count || 0) + (inProgressRes.count || 0),
+            completed: completedRes.count || 0,
         };
     },
 
@@ -156,18 +151,10 @@ export const requestsDB = {
             .single();
         if (error) { console.error('create error:', error); return null; }
 
-        // Increment requester's post count
-        const { data: profile } = await supabase
-            .from('profiles')
-            .select('requests_posted')
-            .eq('id', data.requesterId)
-            .single();
-        if (profile) {
-            await supabase
-                .from('profiles')
-                .update({ requests_posted: (profile.requests_posted || 0) + 1 })
-                .eq('id', data.requesterId);
-        }
+        // Atomically increment requester's post count via RPC
+        await supabase.rpc('increment_requests_posted', {
+            user_id: data.requesterId,
+        });
 
         return mapRequest(row);
     },
@@ -187,6 +174,7 @@ export const requestsDB = {
         if (!existing || existing.status !== 'Open') return null;
         if (existing.requesterId === userId) return null;
 
+        // Atomic: only update if status is still 'Open' (prevents double-accept)
         const { data: row, error } = await supabase
             .from('requests')
             .update({
@@ -197,6 +185,7 @@ export const requestsDB = {
                 updated_at: new Date().toISOString(),
             })
             .eq('id', requestId)
+            .eq('status', 'Open')
             .select()
             .single();
         if (error) { console.error('accept error:', error); return null; }
@@ -221,6 +210,7 @@ export const requestsDB = {
         if (!existing || existing.status !== 'Accepted') return null;
         if (existing.acceptedById !== userId) return null;
 
+        // Atomic: only update if status is still 'Accepted'
         const { data: row, error } = await supabase
             .from('requests')
             .update({
@@ -229,6 +219,7 @@ export const requestsDB = {
                 updated_at: new Date().toISOString(),
             })
             .eq('id', requestId)
+            .eq('status', 'Accepted')
             .select()
             .single();
         if (error) { console.error('markInProgress error:', error); return null; }
@@ -266,37 +257,23 @@ export const requestsDB = {
             updates.payment_status = 'Paid';
         }
 
+        // Atomic: only update if status is still 'InProgress'
         const { data: row, error } = await supabase
             .from('requests')
             .update(updates)
             .eq('id', requestId)
+            .eq('status', 'InProgress')
             .select()
             .single();
         if (error) { console.error('markCompleted error:', error); return null; }
 
-        // Update deliverer stats + award badges
+        // Atomically increment deliverer stats via RPC
         if (existing.acceptedById) {
-            const { data: delivererRow } = await supabase
-                .from('profiles')
-                .select('*')
-                .eq('id', existing.acceptedById)
-                .single();
-
-            if (delivererRow) {
-                const deliverer = mapProfile(delivererRow);
-                deliverer.deliveriesCompleted += 1;
-                deliverer.totalEarnings += parseFloat(existing.reward) || 0;
-                const newBadges = computeBadges(deliverer);
-
-                await supabase
-                    .from('profiles')
-                    .update({
-                        deliveries_completed: deliverer.deliveriesCompleted,
-                        total_earnings: deliverer.totalEarnings,
-                        badges: newBadges,
-                    })
-                    .eq('id', existing.acceptedById);
-            }
+            const rewardAmount = parseFloat(existing.reward) || 0;
+            await supabase.rpc('increment_deliverer_stats', {
+                deliverer_id: existing.acceptedById,
+                earning_amount: rewardAmount,
+            });
         }
 
         // Notify the other party
@@ -321,6 +298,7 @@ export const requestsDB = {
         const existing = await requestsDB.getById(requestId);
         if (!existing || existing.requesterId !== userId) return null;
 
+        // Atomic: only cancel if status is still 'Open' or 'Accepted'
         const { data: row, error } = await supabase
             .from('requests')
             .update({
@@ -328,6 +306,7 @@ export const requestsDB = {
                 updated_at: new Date().toISOString(),
             })
             .eq('id', requestId)
+            .in('status', ['Open', 'Accepted'])
             .select()
             .single();
         if (error) { console.error('cancel error:', error); return null; }
@@ -364,31 +343,12 @@ export const requestsDB = {
             .single();
         if (error) { console.error('rate error:', error); return null; }
 
-        // Update the deliverer's average rating
+        // Atomically update the deliverer's average rating via RPC
         if (existing.acceptedById) {
-            const { data: delivererRow } = await supabase
-                .from('profiles')
-                .select('*')
-                .eq('id', existing.acceptedById)
-                .single();
-
-            if (delivererRow) {
-                const deliverer = mapProfile(delivererRow);
-                const newTotal = deliverer.totalRatings + 1;
-                const newRating = Math.round(((deliverer.rating * deliverer.totalRatings + rating) / newTotal) * 10) / 10;
-                deliverer.rating = newRating;
-                deliverer.totalRatings = newTotal;
-                const newBadges = computeBadges(deliverer);
-
-                await supabase
-                    .from('profiles')
-                    .update({
-                        rating: newRating,
-                        total_ratings: newTotal,
-                        badges: newBadges,
-                    })
-                    .eq('id', existing.acceptedById);
-            }
+            await supabase.rpc('update_deliverer_rating', {
+                deliverer_id: existing.acceptedById,
+                new_rating: rating,
+            });
 
             await addNotification(
                 existing.acceptedById,

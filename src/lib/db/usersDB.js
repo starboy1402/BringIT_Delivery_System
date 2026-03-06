@@ -121,13 +121,14 @@ export const usersDB = {
      * Only includes users who have completed at least 1 delivery.
      * @returns {Promise<Array>} Sorted user list
      */
-    async getLeaderboard() {
+    async getLeaderboard({ limit = 50 } = {}) {
         const { data, error } = await supabase
             .from('profiles')
             .select('*')
             .gt('deliveries_completed', 0)
             .order('deliveries_completed', { ascending: false })
-            .order('rating', { ascending: false });
+            .order('rating', { ascending: false })
+            .limit(limit);
         if (error) { console.error('getLeaderboard error:', error); return []; }
         return (data || []).map(mapProfile);
     },

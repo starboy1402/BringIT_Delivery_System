@@ -5,7 +5,7 @@
  * Uses useNavigate() for routing.
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { MapPin, Package, Search, PlusCircle, Filter, ChevronRight } from 'lucide-react';
 import { useAuth } from '@/contexts';
@@ -18,6 +18,7 @@ export function FeedPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('All');
   const [urgencyFilter, setUrgencyFilter] = useState('All');
   const [showFilters, setShowFilters] = useState(false);
@@ -26,7 +27,17 @@ export function FeedPage() {
   const [requests, setRequests] = useState([]);
   const [stats, setStats] = useState({ total: 0, open: 0, inProgress: 0, completed: 0 });
   const [userDeliveries, setUserDeliveries] = useState(0);
+  const [bookmarkedIds, setBookmarkedIds] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const PAGE_SIZE = 30;
+
+  // Debounce search input — waits 300ms after user stops typing
+  useEffect(() => {
+    const timer = setTimeout(() => setDebouncedSearch(search), 300);
+    return () => clearTimeout(timer);
+  }, [search]);
 
   // Load data whenever filters change
   useEffect(() => {
@@ -34,18 +45,22 @@ export function FeedPage() {
     async function load() {
       setLoading(true);
       try {
-        const [reqs, s] = await Promise.all([
-          requestsDB.getAll({ status: statusFilter, urgency: urgencyFilter, search }),
+        const [result, s] = await Promise.all([
+          requestsDB.getAll({ status: statusFilter, urgency: urgencyFilter, search: debouncedSearch }, { limit: PAGE_SIZE, offset: 0 }),
           requestsDB.getStats(),
         ]);
         if (cancelled) return;
-        setRequests(reqs);
+        setRequests(result.data);
+        setHasMore(result.data.length < result.total);
         setStats(s);
 
-        // Get the logged-in user's delivery count
+        // Get the logged-in user's delivery count + bookmarks in one call
         if (user) {
           const profile = await usersDB.getUser(user.id);
-          if (!cancelled) setUserDeliveries(profile?.deliveriesCompleted || 0);
+          if (!cancelled) {
+            setUserDeliveries(profile?.deliveriesCompleted || 0);
+            setBookmarkedIds(profile?.bookmarkedRequests || []);
+          }
         }
       } catch (err) {
         console.error('Feed load error:', err);
@@ -54,7 +69,22 @@ export function FeedPage() {
     }
     load();
     return () => { cancelled = true; };
-  }, [search, statusFilter, urgencyFilter, user]);
+  }, [debouncedSearch, statusFilter, urgencyFilter, user]);
+
+  const loadMore = async () => {
+    setLoadingMore(true);
+    try {
+      const result = await requestsDB.getAll(
+        { status: statusFilter, urgency: urgencyFilter, search: debouncedSearch },
+        { limit: PAGE_SIZE, offset: requests.length }
+      );
+      setRequests(prev => [...prev, ...result.data]);
+      setHasMore(requests.length + result.data.length < result.total);
+    } catch (err) {
+      console.error('Load more error:', err);
+    }
+    setLoadingMore(false);
+  };
 
   const STAT_CARDS = [
     { label: 'Open Requests', value: stats.open, color: 'text-green-600 dark:text-green-400', bg: 'bg-green-50 dark:bg-green-900/20' },
@@ -175,11 +205,20 @@ export function FeedPage() {
           }
         />
       ) : (
-        <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
-          {requests.map((req) => (
-            <RequestCard key={req.id} request={req} onClick={() => navigate(`/request/${req.id}`)} />
-          ))}
-        </div>
+        <>
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-5">
+            {requests.map((req) => (
+              <RequestCard key={req.id} request={req} isBookmarked={bookmarkedIds.includes(req.id)} onClick={() => navigate(`/request/${req.id}`)} />
+            ))}
+          </div>
+          {hasMore && (
+            <div className="text-center mt-8">
+              <Button variant="secondary" onClick={loadMore} disabled={loadingMore}>
+                {loadingMore ? 'Loading...' : 'Load More'}
+              </Button>
+            </div>
+          )}
+        </>
       )}
     </main>
   );
@@ -188,7 +227,7 @@ export function FeedPage() {
 // ───── RequestCard ─────
 
 /** @param {{ request: object, onClick: () => void }} props */
-function RequestCard({ request: req, onClick }) {
+function RequestCard({ request: req, isBookmarked, onClick }) {
   return (
     <Card
       className="hover:shadow-md transition-all hover:-translate-y-0.5 flex flex-col group"
@@ -207,7 +246,7 @@ function RequestCard({ request: req, onClick }) {
           </div>
           <div className="flex items-center gap-1">
             <UrgencyBadge urgency={req.urgency} />
-            <BookmarkButton requestId={req.id} />
+            <BookmarkButton requestId={req.id} isBookmarked={isBookmarked} />
           </div>
         </div>
 

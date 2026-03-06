@@ -13,6 +13,7 @@ import {
 } from 'lucide-react';
 import { useAuth, useToast, useModal } from '@/contexts';
 import { requestsDB, messagesDB, usersDB } from '@/lib/db';
+import { supabase } from '@/lib/supabase';
 import { timeAgo } from '@/utils/timeAgo';
 import { Button, Card, UrgencyBadge, StatusBadge, StarRating } from '@/components/ui';
 import { Avatar } from '@/components/ui/Avatar';
@@ -46,6 +47,31 @@ export function RequestDetailPage() {
 
   useEffect(() => { reload(); }, [requestId]);
   useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [msgs]);
+
+  // Realtime chat subscription — new messages appear instantly
+  useEffect(() => {
+    const channel = supabase
+      .channel(`messages:${requestId}`)
+      .on('postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'messages', filter: `request_id=eq.${requestId}` },
+        (payload) => {
+          const mapped = {
+            id: payload.new.id,
+            requestId: payload.new.request_id,
+            senderId: payload.new.sender_id,
+            senderName: payload.new.sender_name,
+            text: payload.new.text,
+            createdAt: payload.new.created_at,
+          };
+          setMsgs(prev => {
+            if (prev.some(m => m.id === mapped.id)) return prev;
+            return [...prev, mapped];
+          });
+        }
+      )
+      .subscribe();
+    return () => { supabase.removeChannel(channel); };
+  }, [requestId]);
 
   // Fetch profiles for sidebar (loaded async)
   const [requesterProfile, setRequesterProfile] = useState(null);
@@ -95,9 +121,13 @@ export function RequestDetailPage() {
 
   const handleProgress = async () => {
     if (!user) return;
-    await requestsDB.markInProgress(requestId, user.id);
-    showToast('Marked as in progress');
-    await reload();
+    try {
+      await requestsDB.markInProgress(requestId, user.id);
+      showToast('Marked as in progress');
+      await reload();
+    } catch {
+      showToast('Failed to update status. Please try again.', 'error');
+    }
   };
 
   const handleComplete = () => {
@@ -122,11 +152,15 @@ export function RequestDetailPage() {
 
   const handlePayAndComplete = async () => {
     if (!user) return;
-    await requestsDB.markCompleted(requestId, user.id, paymentMethod);
-    showToast(`Payment via ${paymentMethod} confirmed! Delivery completed 🎉`);
-    setShowPayment(false);
-    await reload();
-    await refreshUser();
+    try {
+      await requestsDB.markCompleted(requestId, user.id, paymentMethod);
+      showToast(`Payment via ${paymentMethod} confirmed! Delivery completed 🎉`);
+      setShowPayment(false);
+      await reload();
+      await refreshUser();
+    } catch {
+      showToast('Payment failed. Please try again.', 'error');
+    }
   };
 
   const handleCancel = () => {
@@ -148,9 +182,13 @@ export function RequestDetailPage() {
 
   const handleRate = async () => {
     if (ratingValue === 0) return;
-    await requestsDB.rate(requestId, ratingValue);
-    showToast('Rating submitted! Thank you ⭐');
-    await reload();
+    try {
+      await requestsDB.rate(requestId, ratingValue);
+      showToast('Rating submitted! Thank you ⭐');
+      await reload();
+    } catch {
+      showToast('Failed to submit rating. Please try again.', 'error');
+    }
   };
 
   const handleReport = () => {
@@ -170,9 +208,12 @@ export function RequestDetailPage() {
   const handleSendMsg = async (e) => {
     e.preventDefault();
     if (!user || !msgText.trim()) return;
-    await messagesDB.send({ requestId, senderId: user.id, senderName: user.name, text: msgText.trim() });
-    setMsgText('');
-    await reload();
+    try {
+      await messagesDB.send({ requestId, senderId: user.id, senderName: user.name, text: msgText.trim() });
+      setMsgText('');
+    } catch {
+      showToast('Failed to send message. Please try again.', 'error');
+    }
   };
 
   return (
