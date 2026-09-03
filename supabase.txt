@@ -1,0 +1,266 @@
+
+
+
+-- 1) Drop the old trigger & function (if they exist)
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP FUNCTION IF EXISTS public.handle_new_user();
+
+
+-- 2) Recreate the profiles table (drop & recreate, or just ensure columns match)
+CREATE TABLE IF NOT EXISTS public.profiles (
+  id            uuid PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  name          text,
+  email         text,
+  student_id    text,
+  department    text,
+  batch         text,
+  hall          text,
+  phone         text,
+  rating        numeric DEFAULT 5.0,
+  total_ratings integer DEFAULT 0,
+  deliveries_completed integer DEFAULT 0,
+  requests_posted      integer DEFAULT 0,
+  total_earnings       integer DEFAULT 0,
+  badges              text[] DEFAULT '{}',
+  bookmarked_requests text[] DEFAULT '{}',
+  created_at   timestamptz DEFAULT now()
+);
+-- 3) Create the trigger function — pulls name & email from Google metadata
+CREATE OR REPLACE FUNCTION public.handle_new_user()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = ''
+AS $$
+BEGIN
+  INSERT INTO public.profiles (id, name, email)
+  VALUES (
+    NEW.id,
+    COALESCE(NEW.raw_user_meta_data ->> 'full_name', NEW.raw_user_meta_data ->> 'name', ''),
+    COALESCE(NEW.email, '')
+  );
+  RETURN NEW;
+END;
+$$;
+
+-- 4) Attach the trigger
+CREATE TRIGGER on_auth_user_created
+  AFTER INSERT ON auth.users
+  FOR EACH ROW
+  EXECUTE FUNCTION public.handle_new_user();
+-- 5) RLS policies
+ALTER TABLE public.profiles ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Users can read any profile" ON public.profiles;
+CREATE POLICY "Users can read any profile"
+  ON public.profiles FOR SELECT
+  TO authenticated
+  USING (true);
+
+DROP POLICY IF EXISTS "Users can update own profile" ON public.profiles;
+CREATE POLICY "Users can update own profile"
+  ON public.profiles FOR UPDATE
+  TO authenticated
+  USING (auth.uid() = id);
+
+DROP POLICY IF EXISTS "Users can update any profile" ON public.profiles;
+CREATE POLICY "Users can update any profile"
+  ON public.profiles FOR UPDATE
+  TO authenticated
+  USING (true);
+
+
+
+-- Allow any authenticated user to update any request
+-- (needed for accept, mark progress, complete, rate, etc.)
+DROP POLICY IF EXISTS "Authenticated users can update requests" ON public.requests;
+CREATE POLICY "Authenticated users can update requests"
+  ON public.requests FOR UPDATE
+  TO authenticated
+  USING (true)
+  WITH CHECK (true);
+
+
+-- Enable realtime on messages and notifications tables
+ALTER PUBLICATION supabase_realtime ADD TABLE messages;
+ALTER PUBLICATION supabase_realtime ADD TABLE notifications;
+
+
+-- 1) Atomically increment requests_posted
+CREATE OR REPLACE FUNCTION increment_requests_posted(user_id UUID)
+RETURNS void AS $$
+BEGIN
+  UPDATE profiles
+  SET requests_posted = COALESCE(requests_posted, 0) + 1
+  WHERE id = user_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 2) Atomically increment deliverer stats (deliveries_completed + earnings + badges)
+CREATE OR REPLACE FUNCTION increment_deliverer_stats(deliverer_id UUID, earning_amount NUMERIC)
+RETURNS void AS $$
+DECLARE
+  updated_profile profiles%ROWTYPE;
+  new_badges JSONB;
+BEGIN
+  UPDATE profiles
+  SET deliveries_completed = COALESCE(deliveries_completed, 0) + 1,
+      total_earnings = COALESCE(total_earnings, 0) + earning_amount
+  WHERE id = deliverer_id
+  RETURNING * INTO updated_profile;
+
+  -- Compute badges
+  new_badges = COALESCE(updated_profile.badges, '[]'::JSONB);
+  IF updated_profile.deliveries_completed >= 10 AND NOT new_badges ? 'Reliable' THEN
+    new_badges = new_badges || '"Reliable"'::JSONB;
+  END IF;
+  IF updated_profile.deliveries_completed >= 20 AND NOT new_badges ? 'Top Deliverer' THEN
+    new_badges = new_badges || '"Top Deliverer"'::JSONB;
+  END IF;
+  IF updated_profile.rating >= 4.8 AND NOT new_badges ? '5-Star' THEN
+    new_badges = new_badges || '"5-Star"'::JSONB;
+  END IF;
+
+  UPDATE profiles SET badges = new_badges WHERE id = deliverer_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 3) Atomically update deliverer rating (recalculates average + badges)
+CREATE OR REPLACE FUNCTION update_deliverer_rating(deliverer_id UUID, new_rating INT)
+RETURNS void AS $$
+DECLARE
+  updated_profile profiles%ROWTYPE;
+  new_avg NUMERIC;
+  new_total INT;
+  new_badges JSONB;
+BEGIN
+  SELECT * INTO updated_profile FROM profiles WHERE id = deliverer_id;
+  IF NOT FOUND THEN RETURN; END IF;
+
+  new_total = COALESCE(updated_profile.total_ratings, 0) + 1;
+  new_avg = ROUND(((COALESCE(updated_profile.rating, 5.0) * COALESCE(updated_profile.total_ratings, 0)) + new_rating) / new_total, 1);
+
+  -- Compute badges
+  new_badges = COALESCE(updated_profile.badges, '[]'::JSONB);
+  IF new_avg >= 4.8 AND NOT new_badges ? '5-Star' THEN
+    new_badges = new_badges || '"5-Star"'::JSONB;
+  END IF;
+  IF updated_profile.deliveries_completed >= 10 AND NOT new_badges ? 'Reliable' THEN
+    new_badges = new_badges || '"Reliable"'::JSONB;
+  END IF;
+  IF updated_profile.deliveries_completed >= 20 AND NOT new_badges ? 'Top Deliverer' THEN
+    new_badges = new_badges || '"Top Deliverer"'::JSONB;
+  END IF;
+
+  UPDATE profiles
+  SET rating = new_avg, total_ratings = new_total, badges = new_badges
+  WHERE id = deliverer_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- ════════════════════════════════════════════
+-- Enable RLS on all tables
+-- ════════════════════════════════════════════
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE requests ENABLE ROW LEVEL SECURITY;
+ALTER TABLE messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;
+
+-- ════════════════════════════════════════════
+-- PROFILES
+-- ════════════════════════════════════════════
+-- Anyone authenticated can read any profile (for leaderboard, names, etc.)
+CREATE POLICY "Profiles: read all" ON profiles
+  FOR SELECT TO authenticated USING (true);
+
+-- Users can only update their own profile
+CREATE POLICY "Profiles: update own" ON profiles
+  FOR UPDATE TO authenticated USING (auth.uid() = id);
+
+-- Insert handled by trigger on auth.users, allow it
+CREATE POLICY "Profiles: insert own" ON profiles
+  FOR INSERT TO authenticated WITH CHECK (auth.uid() = id);
+
+-- ════════════════════════════════════════════
+-- REQUESTS
+-- ════════════════════════════════════════════
+-- Anyone authenticated can read all requests (feed)
+CREATE POLICY "Requests: read all" ON requests
+  FOR SELECT TO authenticated USING (true);
+
+-- Any authenticated user can create a request
+CREATE POLICY "Requests: insert own" ON requests
+  FOR INSERT TO authenticated WITH CHECK (auth.uid() = requester_id);
+
+-- Requester can update their own request (cancel),
+-- OR any authenticated user can update (accept, markInProgress, markCompleted)
+CREATE POLICY "Requests: update" ON requests
+  FOR UPDATE TO authenticated USING (true);
+
+-- ════════════════════════════════════════════
+-- MESSAGES
+-- ════════════════════════════════════════════
+-- Anyone involved in the request can read messages
+CREATE POLICY "Messages: read" ON messages
+  FOR SELECT TO authenticated USING (true);
+
+-- Any authenticated user can send a message (chat is limited by UI)
+CREATE POLICY "Messages: insert" ON messages
+  FOR INSERT TO authenticated WITH CHECK (auth.uid() = sender_id);
+
+-- ════════════════════════════════════════════
+-- NOTIFICATIONS
+-- ════════════════════════════════════════════
+-- Users can only read their own notifications
+CREATE POLICY "Notifications: read own" ON notifications
+  FOR SELECT TO authenticated USING (auth.uid() = user_id);
+
+-- The app inserts notifications for other users (via service role or SECURITY DEFINER functions)
+-- For the anon key, allow inserts since notifications are created server-side by other DB operations
+CREATE POLICY "Notifications: insert" ON notifications
+  FOR INSERT TO authenticated WITH CHECK (true);
+
+-- Users can update (mark read) their own notifications only
+CREATE POLICY "Notifications: update own" ON notifications
+  FOR UPDATE TO authenticated USING (auth.uid() = user_id);
+
+
+-- 1. Increment deliverer stats on completion
+CREATE OR REPLACE FUNCTION increment_deliverer_stats(deliverer_id UUID, earning_amount NUMERIC)
+RETURNS VOID AS $$
+BEGIN
+  UPDATE profiles
+  SET total_earnings = COALESCE(total_earnings, 0) + earning_amount,
+      deliveries_completed = COALESCE(deliveries_completed, 0) + 1
+  WHERE id = deliverer_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 2. Increment requests posted count
+CREATE OR REPLACE FUNCTION increment_requests_posted(user_id UUID)
+RETURNS VOID AS $$
+BEGIN
+  UPDATE profiles
+  SET requests_posted = COALESCE(requests_posted, 0) + 1
+  WHERE id = user_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 3. Update deliverer rating (running average)
+CREATE OR REPLACE FUNCTION update_deliverer_rating(deliverer_id UUID, new_rating NUMERIC)
+RETURNS VOID AS $$
+BEGIN
+  UPDATE profiles
+  SET rating = CASE
+    WHEN COALESCE(deliveries_completed, 0) = 0 THEN new_rating
+    ELSE (COALESCE(rating, 0) * COALESCE(deliveries_completed, 1) + new_rating) 
+         / (COALESCE(deliveries_completed, 1) + 1)
+  END
+  WHERE id = deliverer_id;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+
+SELECT table_name, column_name, data_type 
+FROM information_schema.columns 
+WHERE table_schema = 'public';
