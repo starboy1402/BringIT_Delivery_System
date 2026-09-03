@@ -152,17 +152,55 @@ export function AuthProvider({ children }) {
         }
     }, [user]);
 
+    const signInWithEmail = useCallback(async (email, password) => {
+        if (isSupabaseConfigured) {
+            const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+            if (error) throw error;
+            if (data?.user) {
+                await loadProfile(data.user.id);
+            }
+            return data;
+        } else {
+            const defaultUser = localStore.getUsers()[0];
+            setUser(defaultUser);
+            return { user: defaultUser };
+        }
+    }, [loadProfile]);
+
+    const signUpWithEmail = useCallback(async (email, password, metadata) => {
+        if (isSupabaseConfigured) {
+            const { data, error } = await supabase.auth.signUp({
+                email,
+                password,
+                options: {
+                    data: metadata || {},
+                },
+            });
+            if (error) throw error;
+            if (data?.user) {
+                await loadProfile(data.user.id);
+            }
+            return data;
+        } else {
+            const defaultUser = localStore.getUsers()[0];
+            setUser(defaultUser);
+            return { user: defaultUser };
+        }
+    }, [loadProfile]);
+
     const value = useMemo(() => ({
         user,
         loading,
         isSupabaseConfigured,
         demoUsers: localStore.getUsers(),
         signInWithGoogle,
+        signInWithEmail,
+        signUpWithEmail,
         signInWithDemo,
         switchDemoUser,
         signOut,
         refreshUser,
-    }), [user, loading, signInWithGoogle, signInWithDemo, switchDemoUser, signOut, refreshUser]);
+    }), [user, loading, signInWithGoogle, signInWithEmail, signUpWithEmail, signInWithDemo, switchDemoUser, signOut, refreshUser]);
 
     return (
         <AuthContext.Provider value={value}>

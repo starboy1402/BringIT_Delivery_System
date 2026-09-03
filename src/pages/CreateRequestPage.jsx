@@ -103,10 +103,14 @@ export function CreateRequestPage() {
 
             <form onSubmit={handleSubmit} className="space-y-5">
               <div>
-                <label className="block text-xs font-heading font-extrabold uppercase text-slate-500 dark:text-slate-400 mb-1.5">
+                <label
+                  htmlFor="create-item"
+                  className="block text-xs font-heading font-extrabold uppercase text-slate-500 dark:text-slate-400 mb-1.5"
+                >
                   Item Description *
                 </label>
                 <input
+                  id="create-item"
                   type="text"
                   value={item}
                   onChange={(e) => setItem(e.target.value)}
@@ -118,10 +122,14 @@ export function CreateRequestPage() {
 
               <div className="grid sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-heading font-extrabold uppercase text-slate-500 dark:text-slate-400 mb-1.5">
+                  <label
+                    htmlFor="create-pickup"
+                    className="block text-xs font-heading font-extrabold uppercase text-slate-500 dark:text-slate-400 mb-1.5"
+                  >
                     Pickup Location *
                   </label>
                   <select
+                    id="create-pickup"
                     value={pickup}
                     onChange={(e) => setPickup(e.target.value)}
                     className={INPUT_STYLES}
@@ -133,10 +141,14 @@ export function CreateRequestPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-heading font-extrabold uppercase text-slate-500 dark:text-slate-400 mb-1.5">
+                  <label
+                    htmlFor="create-dropoff"
+                    className="block text-xs font-heading font-extrabold uppercase text-slate-500 dark:text-slate-400 mb-1.5"
+                  >
                     Dropoff Hall *
                   </label>
                   <select
+                    id="create-dropoff"
                     value={dropoff}
                     onChange={(e) => setDropoff(e.target.value)}
                     className={INPUT_STYLES}
@@ -150,14 +162,18 @@ export function CreateRequestPage() {
 
               <div className="grid sm:grid-cols-2 gap-4">
                 <div>
-                  <label className="block text-xs font-heading font-extrabold uppercase text-slate-500 dark:text-slate-400 mb-1.5">
+                  <label
+                    htmlFor="create-reward"
+                    className="block text-xs font-heading font-extrabold uppercase text-slate-500 dark:text-slate-400 mb-1.5"
+                  >
                     Delivery Bounty (BDT) *
                   </label>
                   <div className="relative">
-                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-heading font-bold text-slate-400">
+                    <span className="absolute left-3.5 top-1/2 -translate-y-1/2 font-heading font-bold text-slate-400" aria-hidden="true">
                       ৳
                     </span>
                     <input
+                      id="create-reward"
                       type="number"
                       min="10"
                       max="5000"
@@ -167,13 +183,14 @@ export function CreateRequestPage() {
                       required
                     />
                   </div>
-                  <div className="flex gap-1.5 mt-1.5">
+                  <div className="flex gap-1.5 mt-1.5" role="group" aria-label="Quick preset bounty amounts">
                     {[50, 70, 100, 150].map((amt) => (
                       <button
                         key={amt}
                         type="button"
                         onClick={() => setReward(String(amt))}
-                        className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[10px] font-heading font-bold text-slate-600 dark:text-slate-300 hover:bg-emerald-100 hover:text-emerald-800"
+                        aria-label={`Set bounty to ৳${amt}`}
+                        className="px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[10px] font-heading font-bold text-slate-600 dark:text-slate-300 hover:bg-emerald-100 hover:text-emerald-800 focus:outline-none focus-visible:ring-1 focus-visible:ring-emerald-500"
                       >
                         ৳{amt}
                       </button>
@@ -182,18 +199,23 @@ export function CreateRequestPage() {
                 </div>
 
                 <div>
-                  <label className="block text-xs font-heading font-extrabold uppercase text-slate-500 dark:text-slate-400 mb-1.5">
+                  <label
+                    id="urgency-group-label"
+                    className="block text-xs font-heading font-extrabold uppercase text-slate-500 dark:text-slate-400 mb-1.5"
+                  >
                     Urgency Level *
                   </label>
-                  <div className="grid grid-cols-3 gap-1.5 pt-0.5">
+                  <div className="grid grid-cols-3 gap-1.5 pt-0.5" role="radiogroup" aria-labelledby="urgency-group-label">
                     {['Low', 'Medium', 'High'].map((u) => {
                       const active = urgency === u;
                       return (
                         <button
                           key={u}
                           type="button"
+                          role="radio"
+                          aria-checked={active}
                           onClick={() => setUrgency(u)}
-                          className={`py-2 rounded-xl text-xs font-heading font-bold border-2 transition-all ${
+                          className={`py-2 rounded-xl text-xs font-heading font-bold border-2 transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500 ${
                             active
                               ? u === 'High'
                                 ? 'bg-rose-500 text-white border-slate-900 shadow-[2px_2px_0_0_#0f172a]'
@@ -210,10 +232,14 @@ export function CreateRequestPage() {
               </div>
 
               <div>
-                <label className="block text-xs font-heading font-extrabold uppercase text-slate-500 dark:text-slate-400 mb-1.5">
+                <label
+                  htmlFor="create-details"
+                  className="block text-xs font-heading font-extrabold uppercase text-slate-500 dark:text-slate-400 mb-1.5"
+                >
                   Extra Details & Shop Notes
                 </label>
                 <textarea
+                  id="create-details"
                   rows={3}
                   value={details}
                   onChange={(e) => setDetails(e.target.value)}
