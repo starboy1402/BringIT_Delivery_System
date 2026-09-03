@@ -6,7 +6,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   MapPin, Check, XCircle, Truck, MessageCircle, Send, Flag,
-  ChevronLeft, CreditCard, Smartphone, Star, Map, User, Sparkles, Copy
+  ChevronLeft, CreditCard, Smartphone, Star, Map, User, Sparkles, Copy, ShieldCheck
 } from 'lucide-react';
 import { useAuth, useToast, useModal } from '@/contexts';
 import { requestsDB, messagesDB, usersDB } from '@/lib/db';
@@ -120,13 +120,17 @@ export function RequestDetailPage() {
     );
   }
 
-  const isRequester = user?.id === request.requesterId;
-  const isDeliverer = user?.id === request.acceptedById;
+  // Derived permissions with strict role enforcement
+  const isRequester = Boolean(user && user.id === request.requesterId);
+  const isDeliverer = Boolean(user && user.id === request.acceptedById);
+  const isParticipant = isRequester || isDeliverer;
+
   const canAccept = user && !isRequester && request.status === 'Open';
-  const canMarkProgress = (isDeliverer || !isSupabaseConfigured) && request.status === 'Accepted';
-  const canComplete = ['Accepted', 'InProgress'].includes(request.status);
-  const canCancel = (isRequester || !isSupabaseConfigured) && ['Open', 'Accepted'].includes(request.status);
-  const canRate = isRequester && request.status === 'Completed' && !request.rating;
+  const canMarkProgress = user && isDeliverer && request.status === 'Accepted';
+  const canComplete = user && isParticipant && ['Accepted', 'InProgress'].includes(request.status);
+  const canCancel = user && isRequester && ['Open', 'Accepted'].includes(request.status);
+  const canRate = user && isRequester && request.status === 'Completed' && !request.rating;
+  const canChat = user && isParticipant;
 
   const handleAccept = () => {
     if (!user) {
@@ -435,6 +439,31 @@ export function RequestDetailPage() {
                   <XCircle className="w-4 h-4 text-rose-500" /> Cancel Request
                 </Button>
               )}
+
+              {/* Informative Status Card for Non-Actionable / Bystander States */}
+              {!canAccept && !canMarkProgress && !canComplete && !canCancel && (
+                <div className="p-3.5 bg-slate-100 dark:bg-slate-900 border-2 border-slate-900/40 dark:border-slate-800 rounded-xl text-center space-y-1">
+                  <div className="text-xs font-heading font-extrabold uppercase tracking-wider text-slate-700 dark:text-slate-300 flex items-center justify-center gap-1.5">
+                    <ShieldCheck className="w-4 h-4 text-emerald-500" />
+                    {request.status === 'Completed'
+                      ? 'Mission Fulfilled & Closed'
+                      : request.status === 'Cancelled'
+                      ? 'Mission Cancelled'
+                      : isRequester && request.status === 'Open'
+                      ? 'Your Dispatch is Live on the Board'
+                      : 'Courier Assigned — In Progress'}
+                  </div>
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                    {request.status === 'Completed'
+                      ? 'This errand was safely delivered and closed.'
+                      : request.status === 'Cancelled'
+                      ? 'This dispatch was withdrawn by the requester.'
+                      : isRequester && request.status === 'Open'
+                      ? 'Waiting for a commuter to accept your delivery request.'
+                      : 'This order is currently being fulfilled by the assigned courier.'}
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Requester / Deliverer Profile Badges */}
@@ -473,18 +502,20 @@ export function RequestDetailPage() {
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
             </div>
 
-            {/* Quick reply suggestions */}
-            <div className="px-3 py-1.5 bg-slate-100 dark:bg-slate-900/60 border-b border-slate-200 dark:border-slate-800 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
-              {["At the shop now!", "On the campus bus 🚌", "Reached hall entrance!"].map((t) => (
-                <button
-                  key={t}
-                  onClick={() => sendQuickReply(t)}
-                  className="px-2 py-0.5 rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-[10px] font-bold text-slate-600 dark:text-slate-300 hover:border-emerald-500 flex-shrink-0"
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
+            {/* Quick reply suggestions (only for participants) */}
+            {canChat && (
+              <div className="px-3 py-1.5 bg-slate-100 dark:bg-slate-900/60 border-b border-slate-200 dark:border-slate-800 flex items-center gap-1.5 overflow-x-auto no-scrollbar">
+                {["At the shop now!", "On the campus bus 🚌", "Reached hall entrance!"].map((t) => (
+                  <button
+                    key={t}
+                    onClick={() => sendQuickReply(t)}
+                    className="px-2 py-0.5 rounded-md bg-white dark:bg-slate-800 border border-slate-300 dark:border-slate-700 text-[10px] font-bold text-slate-600 dark:text-slate-300 hover:border-emerald-500 flex-shrink-0"
+                  >
+                    {t}
+                  </button>
+                ))}
+              </div>
+            )}
 
             {/* Message Feed */}
             <div className="flex-1 overflow-y-auto p-4 space-y-3 text-xs bg-slate-50/50 dark:bg-[#070b12]">
@@ -520,23 +551,29 @@ export function RequestDetailPage() {
               <div ref={chatEndRef} />
             </div>
 
-            {/* Chat Input */}
-            <form onSubmit={handleSendMsg} className="p-3 border-t-2 border-slate-900 dark:border-slate-800 bg-white dark:bg-[#0d131f] flex gap-2">
-              <input
-                type="text"
-                value={msgText}
-                onChange={(e) => setMsgText(e.target.value)}
-                placeholder="Type dispatch message..."
-                className="flex-1 px-3 py-2 bg-slate-50 dark:bg-slate-900 border-2 border-slate-900/60 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
-              />
-              <button
-                type="submit"
-                disabled={!msgText.trim()}
-                className="px-4 py-2 bg-emerald-500 text-slate-950 font-heading font-bold text-xs rounded-xl border-2 border-slate-900 hover:bg-emerald-400 disabled:opacity-40 transition-colors shadow-[2px_2px_0_0_#0f172a]"
-              >
-                <Send className="w-4 h-4" />
-              </button>
-            </form>
+            {/* Chat Input or Restricted Notice */}
+            {canChat ? (
+              <form onSubmit={handleSendMsg} className="p-3 border-t-2 border-slate-900 dark:border-slate-800 bg-white dark:bg-[#0d131f] flex gap-2">
+                <input
+                  type="text"
+                  value={msgText}
+                  onChange={(e) => setMsgText(e.target.value)}
+                  placeholder="Type dispatch message..."
+                  className="flex-1 px-3 py-2 bg-slate-50 dark:bg-slate-900 border-2 border-slate-900/60 dark:border-slate-700 rounded-xl text-xs font-medium text-slate-900 dark:text-white focus:outline-none focus:border-emerald-500"
+                />
+                <button
+                  type="submit"
+                  disabled={!msgText.trim()}
+                  className="px-4 py-2 bg-emerald-500 text-slate-950 font-heading font-bold text-xs rounded-xl border-2 border-slate-900 hover:bg-emerald-400 disabled:opacity-40 transition-colors shadow-[2px_2px_0_0_#0f172a]"
+                >
+                  <Send className="w-4 h-4" />
+                </button>
+              </form>
+            ) : (
+              <div className="p-3 border-t-2 border-slate-900 dark:border-slate-800 bg-slate-50 dark:bg-slate-900 text-center text-[11px] font-bold text-slate-400">
+                🔒 Live chat is restricted to the requester and assigned courier.
+              </div>
+            )}
           </div>
 
         </div>

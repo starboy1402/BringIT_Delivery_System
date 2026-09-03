@@ -214,10 +214,20 @@ DROP POLICY IF EXISTS "Requests read" ON public.requests;
 CREATE POLICY "Requests read" ON public.requests FOR SELECT USING (true);
 
 DROP POLICY IF EXISTS "Requests insert" ON public.requests;
-CREATE POLICY "Requests insert" ON public.requests FOR INSERT WITH CHECK (true);
+CREATE POLICY "Requests insert" ON public.requests FOR INSERT 
+WITH CHECK (auth.uid() IS NOT NULL AND (requester_id = auth.uid() OR requester_id IS NULL));
 
+-- Requests update: Strictly enforced for Requester, Deliverer, or Student accepting an open request
 DROP POLICY IF EXISTS "Requests update" ON public.requests;
-CREATE POLICY "Requests update" ON public.requests FOR UPDATE USING (true);
+CREATE POLICY "Requests update" ON public.requests FOR UPDATE 
+USING (
+  (status = 'Open' AND (auth.uid() IS NULL OR auth.uid() != requester_id))
+  OR (auth.uid() IS NOT NULL AND (auth.uid() = requester_id OR auth.uid() = accepted_by_id))
+)
+WITH CHECK (
+  (auth.uid() IS NOT NULL AND (auth.uid() = requester_id OR auth.uid() = accepted_by_id))
+  OR (status = 'Accepted' AND auth.uid() IS NOT NULL AND auth.uid() = accepted_by_id)
+);
 
 -- Messages: Anyone can read and insert chat messages
 DROP POLICY IF EXISTS "Messages read" ON public.messages;

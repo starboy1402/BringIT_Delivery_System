@@ -311,6 +311,12 @@ export const requestsDB = {
     async complete(requestId, userId, { paymentMethod = 'bKash' } = {}) {
         const existing = await requestsDB.getById(requestId);
         if (!existing || !['Accepted', 'InProgress'].includes(existing.status)) return null;
+        
+        // Strict Authorization: Only the requester or assigned deliverer can complete
+        if (existing.requesterId !== userId && existing.acceptedById !== userId) {
+            console.warn('Unauthorized complete attempt rejected for user:', userId);
+            return null;
+        }
 
         if (!isSupabaseConfigured) {
             const updated = localStore.updateRequest(requestId, {
@@ -346,12 +352,8 @@ export const requestsDB = {
                 .select()
                 .single();
             if (error) {
-                return localStore.updateRequest(requestId, {
-                    status: 'Completed',
-                    completedAt: new Date().toISOString(),
-                    paymentMethod,
-                    paymentStatus: 'Paid',
-                });
+                console.error('Supabase complete error:', error);
+                return null;
             }
 
             if (existing.acceptedById) {
@@ -364,13 +366,9 @@ export const requestsDB = {
 
             await addNotification(existing.requesterId, `Delivery completed for "${existing.item}"! Please rate your deliverer. ⭐`, requestId, 'success');
             return mapRequest(row);
-        } catch {
-            return localStore.updateRequest(requestId, {
-                status: 'Completed',
-                completedAt: new Date().toISOString(),
-                paymentMethod,
-                paymentStatus: 'Paid',
-            });
+        } catch (err) {
+            console.error('Complete failed:', err);
+            return null;
         }
     },
 
@@ -378,6 +376,15 @@ export const requestsDB = {
      * Cancel an open request.
      */
     async cancel(requestId, userId) {
+        const existing = await requestsDB.getById(requestId);
+        if (!existing || !['Open', 'Accepted'].includes(existing.status)) return null;
+
+        // Strict Authorization: ONLY the original requester can cancel
+        if (existing.requesterId !== userId) {
+            console.warn('Unauthorized cancel attempt rejected for user:', userId);
+            return null;
+        }
+
         if (!isSupabaseConfigured) {
             return localStore.updateRequest(requestId, { status: 'Cancelled' });
         }
@@ -393,10 +400,14 @@ export const requestsDB = {
                 .eq('requester_id', userId)
                 .select()
                 .single();
-            if (error) return localStore.updateRequest(requestId, { status: 'Cancelled' });
+            if (error) {
+                console.error('Supabase cancel error:', error);
+                return null;
+            }
             return mapRequest(row);
-        } catch {
-            return localStore.updateRequest(requestId, { status: 'Cancelled' });
+        } catch (err) {
+            console.error('Cancel failed:', err);
+            return null;
         }
     },
 
@@ -406,6 +417,12 @@ export const requestsDB = {
     async rate(requestId, userId, rating) {
         const existing = await requestsDB.getById(requestId);
         if (!existing || existing.status !== 'Completed') return null;
+
+        // Strict Authorization: ONLY the original requester can submit a review
+        if (existing.requesterId !== userId) {
+            console.warn('Unauthorized rating attempt rejected for user:', userId);
+            return null;
+        }
 
         if (!isSupabaseConfigured) {
             const updated = localStore.updateRequest(requestId, { rating });
