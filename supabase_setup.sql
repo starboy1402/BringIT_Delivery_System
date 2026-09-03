@@ -229,22 +229,52 @@ WITH CHECK (
   OR (status = 'Accepted' AND auth.uid() IS NOT NULL AND auth.uid() = accepted_by_id)
 );
 
--- Messages: Anyone can read and insert chat messages
+-- Messages: Chat privacy enforced for participants
 DROP POLICY IF EXISTS "Messages read" ON public.messages;
-CREATE POLICY "Messages read" ON public.messages FOR SELECT USING (true);
+CREATE POLICY "Messages read" ON public.messages FOR SELECT 
+USING (
+  auth.uid() IS NULL 
+  OR sender_id = auth.uid() 
+  OR EXISTS (
+    SELECT 1 FROM public.requests r 
+    WHERE r.id = request_id 
+    AND (r.requester_id = auth.uid() OR r.accepted_by_id = auth.uid())
+  )
+);
 
 DROP POLICY IF EXISTS "Messages insert" ON public.messages;
 CREATE POLICY "Messages insert" ON public.messages FOR INSERT WITH CHECK (true);
 
--- Notifications: Users read and manage their notifications
+-- Notifications: Strict user privacy
 DROP POLICY IF EXISTS "Notifications read" ON public.notifications;
-CREATE POLICY "Notifications read" ON public.notifications FOR SELECT USING (auth.uid() = user_id OR true);
+CREATE POLICY "Notifications read" ON public.notifications FOR SELECT USING (auth.uid() IS NOT NULL AND auth.uid() = user_id);
 
 DROP POLICY IF EXISTS "Notifications insert" ON public.notifications;
 CREATE POLICY "Notifications insert" ON public.notifications FOR INSERT WITH CHECK (true);
 
 DROP POLICY IF EXISTS "Notifications update" ON public.notifications;
-CREATE POLICY "Notifications update" ON public.notifications FOR UPDATE USING (auth.uid() = user_id OR true);
+CREATE POLICY "Notifications update" ON public.notifications FOR UPDATE USING (auth.uid() IS NOT NULL AND auth.uid() = user_id);
+
+-- Profile Stats Protection Trigger
+CREATE OR REPLACE FUNCTION public.protect_profile_stats()
+RETURNS TRIGGER AS $$
+BEGIN
+  IF auth.uid() IS NOT NULL AND auth.uid() = NEW.id THEN
+    NEW.total_earnings := OLD.total_earnings;
+    NEW.deliveries_completed := OLD.deliveries_completed;
+    NEW.rating := OLD.rating;
+    NEW.total_ratings := OLD.total_ratings;
+    NEW.requests_posted := OLD.requests_posted;
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+DROP TRIGGER IF EXISTS tr_protect_profile_stats ON public.profiles;
+CREATE TRIGGER tr_protect_profile_stats
+BEFORE UPDATE ON public.profiles
+FOR EACH ROW
+EXECUTE FUNCTION public.protect_profile_stats();
 
 -- -----------------------------------------------------------------------------
 -- 5. REALTIME SUBSCRIPTIONS

@@ -443,9 +443,13 @@ export const requestsDB = {
                 .update({ rating })
                 .eq('id', requestId)
                 .eq('requester_id', userId)
+                .is('rating', null)
                 .select()
                 .single();
-            if (error) return localStore.updateRequest(requestId, { rating });
+            if (error || !row) {
+                console.warn('Rating already submitted or update failed:', error);
+                return null;
+            }
 
             if (existing.acceptedById) {
                 await supabase.rpc('update_deliverer_rating', {
