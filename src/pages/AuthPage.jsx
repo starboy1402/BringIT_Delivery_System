@@ -43,6 +43,20 @@ export function AuthPage() {
     }
   };
 
+  const handleGoogleSignIn = async () => {
+    setError(null);
+    try {
+      await signInWithGoogle();
+    } catch (err) {
+      console.error('Google Auth Error:', err);
+      setError(
+        err.message?.includes('provider is not enabled')
+          ? 'Google Sign-In is not enabled yet in your Supabase dashboard. Enable Google under Authentication > Providers in Supabase with your Google Cloud credentials.'
+          : err.message || 'Google sign-in failed. Please check your Supabase settings or use student email sign-in.'
+      );
+    }
+  };
+
   const handleGuestDemo = () => {
     signInWithDemo('usr-101');
     showToast('Logged in as Guest Student! Exploring BringIT. 🚀');
@@ -194,7 +208,7 @@ export function AuthPage() {
 
         {/* Google OAuth button */}
         <button
-          onClick={signInWithGoogle}
+          onClick={handleGoogleSignIn}
           className="w-full flex items-center justify-center gap-2.5 px-4 py-2.5 bg-white dark:bg-slate-800 border-2 border-slate-900 dark:border-slate-700 rounded-xl hover:bg-slate-50 dark:hover:bg-slate-700 font-heading font-bold text-xs text-slate-800 dark:text-slate-100 shadow-[2px_2px_0_0_#0f172a] transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500"
         >
           <svg className="w-4 h-4" viewBox="0 0 24 24" aria-hidden="true">

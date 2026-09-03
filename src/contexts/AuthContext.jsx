@@ -96,24 +96,17 @@ export function AuthProvider({ children }) {
 
     const signInWithGoogle = useCallback(async () => {
         if (!isSupabaseConfigured) {
-            // In demo mode, sign in as default student
             const defaultUser = localStore.getUsers()[0];
             setUser(defaultUser);
             return;
         }
-        try {
-            const { error } = await supabase.auth.signInWithOAuth({
-                provider: 'google',
-                options: {
-                    redirectTo: window.location.origin + '/feed',
-                },
-            });
-            if (error) console.error('Google sign-in error:', error);
-        } catch (err) {
-            console.warn('OAuth redirect failed, falling back to demo login:', err);
-            const defaultUser = localStore.getUsers()[0];
-            setUser(defaultUser);
-        }
+        const { error } = await supabase.auth.signInWithOAuth({
+            provider: 'google',
+            options: {
+                redirectTo: window.location.origin + '/feed',
+            },
+        });
+        if (error) throw error;
     }, []);
 
     const signInWithDemo = useCallback((userId) => {
